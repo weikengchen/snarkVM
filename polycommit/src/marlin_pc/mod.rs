@@ -444,6 +444,96 @@ impl<E: PairingEngine> PolynomialCommitment<E::Fr> for MarlinKZG10<E> {
         })
     }
 
+    /// On input a polynomial `p` and a point `point`, outputs a proof for the same.
+    fn open_individual_opening_challenges<'a>(
+        ck: &Self::CommitterKey,
+        labeled_polynomials: impl IntoIterator<Item = &'a LabeledPolynomial<E::Fr>>,
+        _commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        point: &'a E::Fr,
+        opening_challenges: &dyn Fn(u64) -> E::Fr,
+        rands: impl IntoIterator<Item = &'a Self::Randomness>,
+        _rng: Option<&mut dyn RngCore>,
+    ) -> Result<Self::Proof, Self::Error>
+    where
+        Self::Randomness: 'a,
+        Self::Commitment: 'a,
+    {
+        let mut p = Polynomial::zero();
+        let mut r = kzg10::Randomness::empty();
+        let mut shifted_w = Polynomial::zero();
+        let mut shifted_r = kzg10::Randomness::empty();
+        let mut shifted_r_witness = Polynomial::zero();
+
+        let mut enforce_degree_bound = false;
+        let mut opening_challenge_counter = 0;
+        for (polynomial, rand) in labeled_polynomials.into_iter().zip(rands) {
+            let degree_bound = polynomial.degree_bound();
+            assert_eq!(degree_bound.is_some(), rand.shifted_rand.is_some());
+
+            let enforced_degree_bounds: Option<&[usize]> =
+                ck.enforced_degree_bounds.as_ref().map(|bounds| bounds.as_slice());
+            kzg10::KZG10::<E>::check_degrees_and_bounds(
+                ck.supported_degree(),
+                ck.max_degree,
+                enforced_degree_bounds,
+                &polynomial,
+            )?;
+
+            // compute challenge^j and challenge^{j+1}.
+            let challenge_j = opening_challenges(opening_challenge_counter);
+            opening_challenge_counter += 1;
+
+            assert_eq!(degree_bound.is_some(), rand.shifted_rand.is_some());
+
+            p += (challenge_j, polynomial.polynomial());
+            r += (challenge_j, &rand.rand);
+
+            if let Some(degree_bound) = degree_bound {
+                enforce_degree_bound = true;
+                let shifted_rand = rand.shifted_rand.as_ref().unwrap();
+                let (witness, shifted_rand_witness) =
+                    kzg10::KZG10::<E>::compute_witness_polynomial(polynomial.polynomial(), *point, &shifted_rand)?;
+                let challenge_j_1 = opening_challenges(opening_challenge_counter);
+                opening_challenge_counter += 1;
+
+                let shifted_witness = shift_polynomial(ck, &witness, degree_bound);
+
+                shifted_w += (challenge_j_1, &shifted_witness);
+                shifted_r += (challenge_j_1, shifted_rand);
+                if let Some(shifted_rand_witness) = shifted_rand_witness {
+                    shifted_r_witness += (challenge_j_1, &shifted_rand_witness);
+                }
+            }
+        }
+        let proof_time = start_timer!(|| "Creating proof for unshifted polynomials");
+        let proof = kzg10::KZG10::open(&ck.powers(), &p, *point, &r)?;
+        let mut w = proof.w.into_projective();
+        let mut random_v = proof.random_v;
+        end_timer!(proof_time);
+
+        if enforce_degree_bound {
+            let proof_time = start_timer!(|| "Creating proof for shifted polynomials");
+            let shifted_proof = kzg10::KZG10::open_with_witness_polynomial(
+                &ck.shifted_powers(None).unwrap(),
+                *point,
+                &shifted_r,
+                &shifted_w,
+                Some(&shifted_r_witness),
+            )?;
+            end_timer!(proof_time);
+
+            w += &shifted_proof.w.into_projective();
+            if let Some(shifted_random_v) = shifted_proof.random_v {
+                random_v = random_v.map(|v| v + &shifted_random_v);
+            }
+        }
+
+        Ok(kzg10::Proof {
+            w: w.into_affine(),
+            random_v,
+        })
+    }
+
     /// Verifies that `value` is the evaluation at `x` of the polynomial
     /// committed inside `comm`.
     fn check<'a, R: RngCore>(

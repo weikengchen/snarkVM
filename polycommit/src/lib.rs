@@ -228,6 +228,20 @@ pub trait PolynomialCommitment<F: Field>: Sized + Clone + Debug {
         Self::Randomness: 'a,
         Self::Commitment: 'a;
 
+    /// Open with individual challenges
+    fn open_individual_opening_challenges<'a>(
+        ck: &Self::CommitterKey,
+        labeled_polynomials: impl IntoIterator<Item = &'a LabeledPolynomial<F>>,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        point: &'a F,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rands: impl IntoIterator<Item = &'a Self::Randomness>,
+        rng: Option<&mut dyn RngCore>,
+    ) -> Result<Self::Proof, Self::Error>
+    where
+        Self::Randomness: 'a,
+        Self::Commitment: 'a;
+
     /// On input a list of labeled polynomials and a query set, `open` outputs a proof of evaluation
     /// of the polynomials at the points in the query set.
     fn batch_open<'a>(
@@ -287,6 +301,77 @@ pub trait PolynomialCommitment<F: Field>: Sized + Clone + Debug {
                 query_comms,
                 *query,
                 opening_challenge,
+                query_rands,
+                Some(rng),
+            )?;
+
+            end_timer!(proof_time);
+
+            proofs.push(proof);
+        }
+        end_timer!(open_time);
+
+        Ok(proofs.into())
+    }
+
+    /// Batch open with individual challenges.
+    fn batch_open_individual_opening_challenges<'a>(
+        ck: &Self::CommitterKey,
+        labeled_polynomials: impl IntoIterator<Item = &'a LabeledPolynomial<F>>,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        query_set: &QuerySet<F>,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rands: impl IntoIterator<Item = &'a Self::Randomness>,
+        rng: Option<&mut dyn RngCore>,
+    ) -> Result<Self::BatchProof, Self::Error>
+    where
+        Self::Randomness: 'a,
+        Self::Commitment: 'a,
+    {
+        let rng = &mut crate::optional_rng::OptionalRng(rng);
+        let poly_rand_comm: BTreeMap<_, _> = labeled_polynomials
+            .into_iter()
+            .zip(rands)
+            .zip(commitments.into_iter())
+            .map(|((poly, r), comm)| (poly.label(), (poly, r, comm)))
+            .collect();
+
+        let open_time = start_timer!(|| format!(
+            "Opening {} polynomials at query set of size {}",
+            poly_rand_comm.len(),
+            query_set.len(),
+        ));
+
+        let mut query_to_labels_map = BTreeMap::new();
+
+        for (label, point) in query_set.iter() {
+            let labels = query_to_labels_map.entry(point).or_insert_with(BTreeSet::new);
+            labels.insert(label);
+        }
+
+        let mut proofs = Vec::new();
+        for (query, labels) in query_to_labels_map.into_iter() {
+            let mut query_polys: Vec<&'a LabeledPolynomial<_>> = Vec::new();
+            let mut query_rands: Vec<&'a Self::Randomness> = Vec::new();
+            let mut query_comms: Vec<&'a LabeledCommitment<Self::Commitment>> = Vec::new();
+
+            for label in labels {
+                let (polynomial, rand, comm) = poly_rand_comm.get(label).ok_or(Error::MissingPolynomial {
+                    label: label.to_string(),
+                })?;
+
+                query_polys.push(polynomial);
+                query_rands.push(rand);
+                query_comms.push(comm);
+            }
+
+            let proof_time = start_timer!(|| "Creating proof");
+            let proof = Self::open_individual_opening_challenges(
+                ck,
+                query_polys,
+                query_comms,
+                &query,
+                opening_challenges,
                 query_rands,
                 Some(rng),
             )?;
@@ -394,6 +479,40 @@ pub trait PolynomialCommitment<F: Field>: Sized + Clone + Debug {
             commitments,
             &poly_query_set,
             opening_challenge,
+            rands,
+            rng,
+        )?;
+        Ok(BatchLCProof {
+            proof,
+            evaluations: Some(poly_evals.values().copied().collect()),
+        })
+    }
+
+    /// Open combinations with individual challenges.
+    fn open_combinations_individual_opening_challenges<'a>(
+        ck: &Self::CommitterKey,
+        linear_combinations: impl IntoIterator<Item = &'a LinearCombination<F>>,
+        polynomials: impl IntoIterator<Item = &'a LabeledPolynomial<F>>,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        query_set: &QuerySet<F>,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rands: impl IntoIterator<Item = &'a Self::Randomness>,
+        rng: Option<&mut dyn RngCore>,
+    ) -> Result<BatchLCProof<F, Self>, Self::Error>
+    where
+        Self::Randomness: 'a,
+        Self::Commitment: 'a,
+    {
+        let linear_combinations: Vec<_> = linear_combinations.into_iter().collect();
+        let polynomials: Vec<_> = polynomials.into_iter().collect();
+        let poly_query_set = lc_query_set_to_poly_query_set(linear_combinations.iter().copied(), query_set);
+        let poly_evals = evaluate_query_set(polynomials.iter().copied(), &poly_query_set);
+        let proof = Self::batch_open_individual_opening_challenges(
+            ck,
+            polynomials,
+            commitments,
+            &poly_query_set,
+            opening_challenges,
             rands,
             rng,
         )?;
