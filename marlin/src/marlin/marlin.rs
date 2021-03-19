@@ -18,12 +18,7 @@ use crate::{
     ahp::{AHPError, AHPForR1CS, EvaluationsProvider},
     fiat_shamir::FiatShamirRng,
     marlin::{
-        compute_vk_hash,
-        CircuitProvingKey,
-        CircuitVerifyingKey,
-        MarlinError,
-        PreparedCircuitVerifyingKey,
-        Proof,
+        compute_vk_hash, CircuitProvingKey, CircuitVerifyingKey, MarlinError, PreparedCircuitVerifyingKey, Proof,
         UniversalSRS,
     },
 };
@@ -80,13 +75,13 @@ pub struct MarlinCore<
 );
 
 impl<
-    F: PrimeField,
-    FSF: PrimeField,
-    PC: PolynomialCommitment<F>,
-    FS: FiatShamirRng<F, FSF>,
-    MC: MarlinConfig,
-    D: Digest,
-> MarlinCore<F, FSF, PC, FS, MC, D>
+        F: PrimeField,
+        FSF: PrimeField,
+        PC: PolynomialCommitment<F>,
+        FS: FiatShamirRng<F, FSF>,
+        MC: MarlinConfig,
+        D: Digest,
+    > MarlinCore<F, FSF, PC, FS, MC, D>
 where
     PC::VerifierKey: ToConstraintField<FSF>,
     PC::Commitment: ToConstraintField<FSF>,
@@ -128,6 +123,7 @@ where
 
         // TODO: Add check that c is in the correct mode.
         let circuit = AHPForR1CS::index(c)?;
+        // TODO (howardwu): Check if we need to include Some(index.index_info.num_variables).
         let srs = PC::setup(circuit.max_degree(), rng).map_err(MarlinError::from_pc_err)?;
 
         let coeff_support = AHPForR1CS::get_degree_bounds(&circuit.index_info);
@@ -210,6 +206,7 @@ where
         }
 
         let coefficient_support = AHPForR1CS::get_degree_bounds(&index.index_info);
+
         // Marlin only needs degree 2 random polynomials
         let supported_hiding_bound = 1;
         let (committer_key, verifier_key) = PC::trim(
@@ -325,10 +322,8 @@ where
             fs_rng.absorb_native_field_elements(&first_commitments);
             match prover_first_message.field_elements.is_empty() {
                 true => (),
-                false => fs_rng.absorb_nonnative_field_elements(
-                    &prover_first_message.field_elements,
-                    OptimizationType::Constraints,
-                ),
+                false => fs_rng
+                    .absorb_nonnative_field_elements(&prover_first_message.field_elements, OptimizationType::Weight),
             };
         } else {
             fs_rng.absorb_bytes(&to_bytes![first_commitments, prover_first_message].unwrap());
@@ -357,10 +352,8 @@ where
             fs_rng.absorb_native_field_elements(&second_commitments);
             match prover_second_message.field_elements.is_empty() {
                 true => (),
-                false => fs_rng.absorb_nonnative_field_elements(
-                    &prover_second_message.field_elements,
-                    OptimizationType::Constraints,
-                ),
+                false => fs_rng
+                    .absorb_nonnative_field_elements(&prover_second_message.field_elements, OptimizationType::Weight),
             };
         } else {
             fs_rng.absorb_bytes(&to_bytes![second_commitments, prover_second_message].unwrap());
@@ -387,10 +380,8 @@ where
             fs_rng.absorb_native_field_elements(&third_commitments);
             match prover_third_message.field_elements.is_empty() {
                 true => (),
-                false => fs_rng.absorb_nonnative_field_elements(
-                    &prover_third_message.field_elements,
-                    OptimizationType::Constraints,
-                ),
+                false => fs_rng
+                    .absorb_nonnative_field_elements(&prover_third_message.field_elements, OptimizationType::Weight),
             };
         } else {
             fs_rng.absorb_bytes(&to_bytes![third_commitments, prover_third_message].unwrap());
@@ -491,7 +482,7 @@ where
         end_timer!(eval_time);
 
         if for_recursion {
-            fs_rng.absorb_nonnative_field_elements(&evaluations, OptimizationType::Constraints);
+            fs_rng.absorb_nonnative_field_elements(&evaluations, OptimizationType::Weight);
         } else {
             fs_rng.absorb_bytes(&to_bytes![&evaluations].unwrap());
         }
@@ -504,17 +495,17 @@ where
             let mut opening_challenges = Vec::<F>::new();
             opening_challenges.append(&mut fs_rng.squeeze_128_bits_nonnative_field_elements(num_open_challenges));
 
-            // let _opening_challenges_f = |i| opening_challenges[i as usize];
+            let opening_challenges_f = |i| opening_challenges[i as usize];
 
             // TODO (raychu86): Impl `check_combinations_individual_opening_challenges`.
-            // PC::open_combinations_individual_opening_challenges(
-            PC::open_combinations(
+            PC::open_combinations_individual_opening_challenges(
+                // PC::open_combinations(
                 &circuit_proving_key.committer_key,
                 &lc_s,
                 polynomials,
                 &labeled_commitments,
                 &query_set,
-                fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0], // opening_challenges_f
+                &opening_challenges_f,
                 &commitment_randomnesses,
                 Some(zk_rng),
             )
@@ -569,7 +560,7 @@ where
         if for_recursion {
             fs_rng.absorb_bytes(&to_bytes![&Self::PROTOCOL_NAME].unwrap());
             fs_rng.absorb_native_field_elements(&compute_vk_hash::<F, FSF, PC, FS>(&circuit_verifying_key));
-            fs_rng.absorb_nonnative_field_elements(&public_input, OptimizationType::Constraints);
+            fs_rng.absorb_nonnative_field_elements(&public_input, OptimizationType::Weight);
         } else {
             fs_rng.absorb_bytes(&to_bytes![&Self::PROTOCOL_NAME, &circuit_verifying_key, &public_input].unwrap());
         }
@@ -585,7 +576,7 @@ where
                 true => (),
                 false => fs_rng.absorb_nonnative_field_elements(
                     &proof.prover_messages[0].field_elements,
-                    OptimizationType::Constraints,
+                    OptimizationType::Weight,
                 ),
             };
         } else {
@@ -605,7 +596,7 @@ where
                 true => (),
                 false => fs_rng.absorb_nonnative_field_elements(
                     &proof.prover_messages[1].field_elements,
-                    OptimizationType::Constraints,
+                    OptimizationType::Weight,
                 ),
             };
         } else {
@@ -625,7 +616,7 @@ where
                 true => (),
                 false => fs_rng.absorb_nonnative_field_elements(
                     &proof.prover_messages[2].field_elements,
-                    OptimizationType::Constraints,
+                    OptimizationType::Weight,
                 ),
             };
         } else {
@@ -652,7 +643,7 @@ where
         };
 
         // Gather commitments in one vector.
-        let commitments = circuit_verifying_key
+        let commitments: Vec<_> = circuit_verifying_key
             .iter()
             .chain(first_commitments)
             .chain(second_commitments)
@@ -660,12 +651,13 @@ where
             .cloned()
             .zip(polynomial_labels)
             .zip(degree_bounds)
-            .map(|((c, l), d)| LabeledCommitment::new(l, c, d));
+            .map(|((c, l), d)| LabeledCommitment::new(l, c, d))
+            .collect();
 
         let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng, for_recursion);
 
         if for_recursion {
-            fs_rng.absorb_nonnative_field_elements(&proof.evaluations, OptimizationType::Constraints);
+            fs_rng.absorb_nonnative_field_elements(&proof.evaluations, OptimizationType::Weight);
         } else {
             fs_rng.absorb_bytes(&to_bytes![&proof.evaluations].unwrap());
         }
@@ -694,18 +686,17 @@ where
             let mut opening_challenges = Vec::<F>::new();
             opening_challenges.append(&mut fs_rng.squeeze_128_bits_nonnative_field_elements(num_open_challenges));
 
-            // let _opening_challenges_f = |i| opening_challenges[i as usize];
+            let opening_challenges_f = |i| opening_challenges[i as usize];
 
             // TODO (raychu86): Impl `check_combinations_individual_opening_challenges`.
-            // PC::check_combinations_individual_opening_challenges(
-            PC::check_combinations(
+            PC::check_combinations_individual_opening_challenges(
                 &circuit_verifying_key.verifier_key,
                 &lc_s,
-                commitments,
+                &commitments,
                 &query_set,
                 &evaluations,
                 &proof.pc_proof,
-                fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0], // opening_challenges_f
+                &opening_challenges_f,
                 &mut fs_rng,
             )
             .map_err(MarlinError::from_pc_err)?
@@ -715,7 +706,7 @@ where
             PC::check_combinations(
                 &circuit_verifying_key.verifier_key,
                 &lc_s,
-                commitments,
+                &commitments,
                 &query_set,
                 &evaluations,
                 &proof.pc_proof,
