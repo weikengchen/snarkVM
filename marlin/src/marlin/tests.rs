@@ -116,7 +116,7 @@ mod marlin {
     }
 
     impl_marlin_test!(MarlinPCTest, MarlinInst);
-    // impl_marlin_test!(SonicPCTest, MarlinSonicInst);
+    impl_marlin_test!(SonicPCTest, MarlinSonicInst);
 
     #[test]
     fn prove_and_verify_with_tall_matrix_big() {
@@ -124,7 +124,7 @@ mod marlin {
         let num_variables = 25;
 
         MarlinPCTest::test_circuit(num_constraints, num_variables);
-        // SonicPCTest::test_circuit(num_constraints, num_variables);
+        SonicPCTest::test_circuit(num_constraints, num_variables);
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod marlin {
         let num_variables = 25;
 
         MarlinPCTest::test_circuit(num_constraints, num_variables);
-        // SonicPCTest::test_circuit(num_constraints, num_variables);
+        SonicPCTest::test_circuit(num_constraints, num_variables);
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod marlin {
         let num_variables = 100;
 
         MarlinPCTest::test_circuit(num_constraints, num_variables);
-        // SonicPCTest::test_circuit(num_constraints, num_variables);
+        SonicPCTest::test_circuit(num_constraints, num_variables);
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod marlin {
         let num_variables = 26;
 
         MarlinPCTest::test_circuit(num_constraints, num_variables);
-        // SonicPCTest::test_circuit(num_constraints, num_variables);
+        SonicPCTest::test_circuit(num_constraints, num_variables);
     }
 
     #[test]
@@ -160,6 +160,6 @@ mod marlin {
         let num_variables = 25;
 
         MarlinPCTest::test_circuit(num_constraints, num_variables);
-        // SonicPCTest::test_circuit(num_constraints, num_variables);
+        SonicPCTest::test_circuit(num_constraints, num_variables);
     }
 }
