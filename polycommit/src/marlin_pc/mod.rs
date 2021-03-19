@@ -21,25 +21,9 @@ mod data_structures;
 pub use data_structures::*;
 
 use crate::{
-    kzg10,
-    BTreeMap,
-    BTreeSet,
-    BatchLCProof,
-    Error,
-    Evaluations,
-    LabeledCommitment,
-    LabeledPolynomial,
-    LinearCombination,
-    PCCommitterKey,
-    PCRandomness,
-    PCUniversalParams,
-    Polynomial,
-    PolynomialCommitment,
-    QuerySet,
-    String,
-    ToOwned,
-    ToString,
-    Vec,
+    kzg10, BTreeMap, BTreeSet, BatchLCProof, Error, Evaluations, LabeledCommitment, LabeledPolynomial,
+    LinearCombination, PCCommitterKey, PCRandomness, PCUniversalParams, Polynomial, PolynomialCommitment, QuerySet,
+    String, ToOwned, ToString, Vec,
 };
 use snarkvm_curves::traits::{AffineCurve, PairingEngine, ProjectiveCurve};
 use snarkvm_fields::{Field, One, PrimeField, Zero};
@@ -164,6 +148,49 @@ impl<E: PairingEngine> MarlinKZG10<E> {
                 combined_comm += &adjusted_comm;
             }
             challenge_i *= &opening_challenge.square();
+        }
+
+        end_timer!(acc_time);
+        Ok((combined_comm, combined_value))
+    }
+
+    /// Accumulate `commitments` and `values` according to `opening_challenge`.
+    fn accumulate_commitments_and_values_individual_opening_challenges<'a>(
+        vk: &VerifierKey<E>,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Commitment<E>>>,
+        values: impl IntoIterator<Item = E::Fr>,
+        opening_challenges: &dyn Fn(u64) -> E::Fr,
+    ) -> Result<(E::G1Projective, E::Fr), Error> {
+        let acc_time = start_timer!(|| "Accumulating commitments and values");
+        let mut combined_comm = E::G1Projective::zero();
+        let mut combined_value = E::Fr::zero();
+        let mut opening_challenge_counter = 0;
+        for (labeled_commitment, value) in commitments.into_iter().zip(values) {
+            let degree_bound = labeled_commitment.degree_bound();
+            let commitment = labeled_commitment.commitment();
+            assert_eq!(degree_bound.is_some(), commitment.shifted_comm.is_some());
+
+            let challenge_i = opening_challenges(opening_challenge_counter);
+            opening_challenge_counter += 1;
+
+            combined_comm += &commitment.comm.0.mul(challenge_i);
+            combined_value += &(value * &challenge_i);
+
+            if let Some(degree_bound) = degree_bound {
+                let challenge_i_1 = opening_challenges(opening_challenge_counter);
+                opening_challenge_counter += 1;
+
+                let shifted_comm = commitment.shifted_comm.as_ref().unwrap().0.into_projective();
+
+                let shift_power = vk
+                    .get_shift_power(degree_bound)
+                    .ok_or(Error::UnsupportedDegreeBound(degree_bound))?;
+
+                let mut adjusted_comm = shifted_comm - &shift_power.mul(value);
+
+                adjusted_comm.mul_assign(challenge_i_1.into_repr());
+                combined_comm += &adjusted_comm;
+            }
         }
 
         end_timer!(acc_time);
@@ -671,6 +698,33 @@ impl<E: PairingEngine> PolynomialCommitment<E::Fr> for MarlinKZG10<E> {
             opening_challenge,
             rng,
         )
+    }
+
+    /// Verifies that `value` is the evaluation at `x` of the polynomial
+    /// committed inside `comm`.
+    fn check_individual_opening_challenges<'a>(
+        vk: &Self::VerifierKey,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        point: &'a E::Fr,
+        values: impl IntoIterator<Item = E::Fr>,
+        proof: &Self::Proof,
+        opening_challenges: &dyn Fn(u64) -> E::Fr,
+        _rng: Option<&mut dyn RngCore>,
+    ) -> Result<bool, Self::Error>
+    where
+        Self::Commitment: 'a,
+    {
+        let check_time = start_timer!(|| "Checking evaluations");
+        let (combined_comm, combined_value) = Self::accumulate_commitments_and_values_individual_opening_challenges(
+            vk,
+            commitments,
+            values,
+            opening_challenges,
+        )?;
+        let combined_comm = kzg10::Commitment(combined_comm.into());
+        let result = kzg10::KZG10::check(&vk.vk, &combined_comm, *point, combined_value, proof)?;
+        end_timer!(check_time);
+        Ok(result)
     }
 }
 
