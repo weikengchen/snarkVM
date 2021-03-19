@@ -28,6 +28,8 @@ use snarkvm_curves::{
     traits::{PairingCurve, PairingEngine},
     ProjectiveCurve,
 };
+use snarkvm_fields::ConstraintFieldError;
+use snarkvm_r1cs::ToConstraintField;
 use snarkvm_utilities::{
     bytes::{FromBytes, ToBytes},
     error,
@@ -190,6 +192,16 @@ impl<E: PairingEngine> PCVerifierKey for VerifierKey<E> {
 
     fn supported_degree(&self) -> usize {
         self.supported_degree
+    }
+}
+
+impl<E: PairingEngine> ToConstraintField<E::Fq> for VerifierKey<E>
+where
+    E::G1Affine: ToConstraintField<E::Fq>,
+    E::G2Affine: ToConstraintField<E::Fq>,
+{
+    fn to_field_elements(&self) -> Result<Vec<E::Fq>, ConstraintFieldError> {
+        unimplemented!()
     }
 }
 
