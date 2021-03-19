@@ -13,6 +13,7 @@
 
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
+#![allow(unused_imports)]
 
 //! The Marlin zkSNARK implementation
 use crate::{
@@ -95,15 +96,17 @@ where
         circuit: &Self::AllocatedCircuit,
         rng: &mut R,
     ) -> Result<Self::Proof, SNARKError> {
-        let proving_time = start_timer!(|| "{Marlin}::Proving");
-        let proof = MarlinCore::<<E as PairingEngine>::Fr, MultiPC<E>, MarlinDefaultConfig, Blake2s>::prove(
-            &proving_key.proving_key,
-            circuit,
-            rng,
-        )
-        .map_err(|error| SNARKError::Crate("marlin", format!("Failed to generate proof - {:?}", error)))?;
-        end_timer!(proving_time);
-        Ok(proof)
+        // let proving_time = start_timer!(|| "{Marlin}::Proving");
+        // let proof = MarlinCore::<<E as PairingEngine>::Fr, _, MultiPC<E>, _, MarlinDefaultConfig, Blake2s>::prove(
+        //     &proving_key.proving_key,
+        //     circuit,
+        //     rng,
+        // )
+        // .map_err(|error| SNARKError::Crate("marlin", format!("Failed to generate proof - {:?}", error)))?;
+        // end_timer!(proving_time);
+        // Ok(proof)
+
+        unimplemented!()
     }
 
     fn verify(
@@ -111,15 +114,20 @@ where
         input: &Self::VerifierInput,
         proof: &Self::Proof,
     ) -> Result<bool, SNARKError> {
-        let verification_time = start_timer!(|| "{Marlin}::Verifying");
-        let res = MarlinCore::<<E as PairingEngine>::Fr, MultiPC<E>, MarlinDefaultConfig, Blake2s>::verify(
-            &verifying_key,
-            &input.to_field_elements()?,
-            &proof,
-        )
-        .map_err(|_| SNARKError::Crate("marlin", "Could not verify proof".to_owned()))?;
-        end_timer!(verification_time);
+        // let verification_time = start_timer!(|| "{Marlin}::Verifying");
+        // let res = MarlinCore::<
+        //     <E as PairingEngine>::Fr,
+        //     <E as PairingEngine>::Fq,
+        //     MultiPC<E>,
+        //     _,
+        //     MarlinDefaultConfig,
+        //     Blake2s,
+        // >::verify(&verifying_key, &input.to_field_elements()?, &proof)
+        // .map_err(|_| SNARKError::Crate("marlin", "Could not verify proof".to_owned()))?;
+        // end_timer!(verification_time);
+        //
+        // Ok(res)
 
-        Ok(res)
+        unimplemented!()
     }
 }

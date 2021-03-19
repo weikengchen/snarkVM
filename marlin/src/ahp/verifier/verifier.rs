@@ -90,7 +90,9 @@ impl<F: PrimeField> AHPForR1CS<F> {
     pub fn verifier_query_set<'a, 'b, R: RngCore>(
         state: VerifierState<F>,
         _: &'a mut R,
+        with_vanishing: bool,
     ) -> (QuerySet<'b, F>, VerifierState<F>) {
+        let alpha = state.first_round_message.unwrap().alpha;
         let beta = state.second_round_message.unwrap().beta;
 
         let gamma = state.gamma.unwrap();
@@ -177,6 +179,12 @@ impl<F: PrimeField> AHPForR1CS<F> {
         query_set.insert(("b_denom".into(), gamma));
         query_set.insert(("c_denom".into(), gamma));
         query_set.insert(("inner_sumcheck".into(), gamma));
+
+        if with_vanishing {
+            query_set.insert(("vanishing_poly_h_alpha".into(), alpha));
+            query_set.insert(("vanishing_poly_h_beta".into(), beta));
+            query_set.insert(("vanishing_poly_k_gamma".into(), gamma));
+        }
 
         (query_set, state)
     }

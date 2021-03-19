@@ -49,6 +49,18 @@ impl<F: PrimeField> AHPForR1CS<F> {
         // Polynomials for C
         "c_row", "c_col", "c_val", "c_row_col",
     ];
+    /// The labels for the polynomials output and vanishing polynomials by the AHP indexer.
+    #[rustfmt::skip]
+    pub const INDEXER_POLYNOMIALS_WITH_VANISHING: [&'static str; 14] = [
+        // Polynomials for A
+        "a_row", "a_col", "a_val", "a_row_col",
+        // Polynomials for B
+        "b_row", "b_col", "b_val", "b_row_col",
+        // Polynomials for C
+        "c_row", "c_col", "c_val", "c_row_col",
+        // Vanishing polynomials
+        "vanishing_poly_h", "vanishing_poly_k"
+    ];
     /// The linear combinations that are statically known to evaluate to zero.
     pub const LC_WITH_ZERO_EVAL: [&'static str; 2] = ["inner_sumcheck", "outer_sumcheck"];
     /// The labels for the polynomials output by the AHP prover.
@@ -59,6 +71,13 @@ impl<F: PrimeField> AHPForR1CS<F> {
         // Second sumcheck
         "g_2", "h_2",
     ];
+
+    pub(crate) fn polynomial_labels_with_vanishing() -> impl Iterator<Item = String> {
+        Self::INDEXER_POLYNOMIALS_WITH_VANISHING
+            .iter()
+            .chain(&Self::PROVER_POLYNOMIALS)
+            .map(|s| s.to_string())
+    }
 
     pub(crate) fn polynomial_labels() -> impl Iterator<Item = String> {
         Self::INDEXER_POLYNOMIALS
@@ -119,6 +138,7 @@ impl<F: PrimeField> AHPForR1CS<F> {
         public_input: &[F],
         evals: &E,
         state: &verifier::VerifierState<F>,
+        with_vanishing: bool,
     ) -> Result<Vec<LinearCombination<F>>, AHPError> {
         let domain_h = state.domain_h;
         let domain_k = state.domain_k;
@@ -239,6 +259,19 @@ impl<F: PrimeField> AHPForR1CS<F> {
         linear_combinations.push(b_denom);
         linear_combinations.push(c_denom);
         linear_combinations.push(inner_sumcheck);
+
+        if with_vanishing {
+            let vanishing_poly_h_alpha =
+                LinearCombination::new("vanishing_poly_h_alpha", vec![(F::one(), "vanishing_poly_h")]);
+            let vanishing_poly_h_beta =
+                LinearCombination::new("vanishing_poly_h_beta", vec![(F::one(), "vanishing_poly_h")]);
+            let vanishing_poly_k_gamma =
+                LinearCombination::new("vanishing_poly_k_gamma", vec![(F::one(), "vanishing_poly_k")]);
+
+            linear_combinations.push(vanishing_poly_h_alpha);
+            linear_combinations.push(vanishing_poly_h_beta);
+            linear_combinations.push(vanishing_poly_k_gamma);
+        }
 
         linear_combinations.sort_by(|a, b| a.label.cmp(&b.label));
         Ok(linear_combinations)

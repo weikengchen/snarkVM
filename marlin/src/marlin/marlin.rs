@@ -16,18 +16,28 @@
 
 use crate::{
     ahp::{AHPError, AHPForR1CS, EvaluationsProvider},
-    marlin::{CircuitProvingKey, CircuitVerifyingKey, FiatShamirRng, MarlinError, Proof, UniversalSRS},
+    fiat_shamir::FiatShamirRng,
+    marlin::{
+        compute_vk_hash,
+        CircuitProvingKey,
+        CircuitVerifyingKey,
+        MarlinError,
+        PreparedCircuitVerifyingKey,
+        Proof,
+        UniversalSRS,
+    },
 };
+
 use snarkvm_algorithms::fft::EvaluationDomain;
 use snarkvm_fields::PrimeField;
 use snarkvm_polycommit::{Evaluations, LabeledCommitment, LabeledPolynomial, PCUniversalParams, PolynomialCommitment};
-use snarkvm_r1cs::{ConstraintSynthesizer, SynthesisError};
+use snarkvm_r1cs::{ConstraintSynthesizer, SynthesisError, ToConstraintField};
 use snarkvm_utilities::{bytes::ToBytes, rand::UniformRand, to_bytes};
 
-use crate::marlin::PreparedCircuitVerifyingKey;
 use core::marker::PhantomData;
 use digest::Digest;
 use rand_core::RngCore;
+use snarkvm_nonnative::params::OptimizationType;
 
 /// Marlin configuration.
 pub trait MarlinConfig: Clone {
@@ -53,14 +63,34 @@ impl MarlinConfig for MarlinRecursiveConfig {
 
 // TODO (raychu86): Remove the digest bound.
 /// The Marlin proof system.
-pub struct MarlinCore<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest>(
+pub struct MarlinCore<
+    F: PrimeField,
+    FSF: PrimeField,
+    PC: PolynomialCommitment<F>,
+    FS: FiatShamirRng<F, FSF>,
+    MC: MarlinConfig,
+    D: Digest,
+>(
     #[doc(hidden)] PhantomData<F>,
+    #[doc(hidden)] PhantomData<FSF>,
     #[doc(hidden)] PhantomData<PC>,
+    #[doc(hidden)] PhantomData<FS>,
     #[doc(hidden)] PhantomData<MC>,
     #[doc(hidden)] PhantomData<D>,
 );
 
-impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> MarlinCore<F, PC, MC, D> {
+impl<
+    F: PrimeField,
+    FSF: PrimeField,
+    PC: PolynomialCommitment<F>,
+    FS: FiatShamirRng<F, FSF>,
+    MC: MarlinConfig,
+    D: Digest,
+> MarlinCore<F, FSF, PC, FS, MC, D>
+where
+    PC::VerifierKey: ToConstraintField<FSF>,
+    PC::Commitment: ToConstraintField<FSF>,
+{
     /// The personalization string for this protocol.
     /// Used to personalize the Fiat-Shamir RNG.
     pub const PROTOCOL_NAME: &'static [u8] = b"MARLIN-2019";
@@ -250,26 +280,37 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         let prover_time = start_timer!(|| "Marlin::Prover");
         // TODO: Add check that c is in the correct mode.
 
+        let for_recursion = MC::FOR_RECURSION;
+
         let prover_init_state = AHPForR1CS::prover_init(&circuit_proving_key.circuit, circuit)?;
         let public_input = prover_init_state.public_input();
 
-        // TODO (raychu86): Update the Rng to FS::new();
-        let mut fs_rng = FiatShamirRng::<D>::from_seed(
-            &to_bytes![
-                &Self::PROTOCOL_NAME,
-                &circuit_proving_key.circuit_verifying_key,
-                &public_input
-            ]
-            .unwrap(),
-        );
+        let mut fs_rng = FS::new();
 
-        // TODO (raychu86): Add `hiding` flag and `for_recursion` logic.
+        let hiding = !for_recursion;
+
+        if for_recursion {
+            fs_rng.absorb_bytes(&to_bytes![&Self::PROTOCOL_NAME].unwrap());
+            fs_rng.absorb_native_field_elements(&compute_vk_hash::<F, FSF, PC, FS>(
+                &circuit_proving_key.circuit_verifying_key,
+            ));
+            fs_rng.absorb_nonnative_field_elements(&public_input, OptimizationType::Constraints);
+        } else {
+            fs_rng.absorb_bytes(
+                &to_bytes![
+                    &Self::PROTOCOL_NAME,
+                    &circuit_proving_key.circuit_verifying_key,
+                    &public_input
+                ]
+                .unwrap(),
+            );
+        }
 
         // --------------------------------------------------------------------
         // First round
 
         let (prover_first_message, prover_first_oracles, prover_state) =
-            AHPForR1CS::prover_first_round(prover_init_state, zk_rng)?;
+            AHPForR1CS::prover_first_round(prover_init_state, zk_rng, hiding)?;
 
         let first_round_comm_time = start_timer!(|| "Committing to first round polys");
         let (first_commitments, first_commitment_randomnesses) = PC::commit(
@@ -280,7 +321,18 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         .map_err(MarlinError::from_pc_err)?;
         end_timer!(first_round_comm_time);
 
-        fs_rng.absorb(&to_bytes![first_commitments, prover_first_message].unwrap());
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&first_commitments);
+            match prover_first_message.field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &prover_first_message.field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![first_commitments, prover_first_message].unwrap());
+        }
 
         let (verifier_first_message, verifier_state) =
             AHPForR1CS::verifier_first_round(circuit_proving_key.circuit_verifying_key.circuit_info, &mut fs_rng)?;
@@ -290,7 +342,7 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         // Second round
 
         let (prover_second_message, prover_second_oracles, prover_state) =
-            AHPForR1CS::prover_second_round(&verifier_first_message, prover_state, zk_rng);
+            AHPForR1CS::prover_second_round(&verifier_first_message, prover_state, zk_rng, hiding);
 
         let second_round_comm_time = start_timer!(|| "Committing to second round polys");
         let (second_commitments, second_commitment_randomnesses) = PC::commit(
@@ -301,7 +353,18 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         .map_err(MarlinError::from_pc_err)?;
         end_timer!(second_round_comm_time);
 
-        fs_rng.absorb(&to_bytes![second_commitments, prover_second_message].unwrap());
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&second_commitments);
+            match prover_second_message.field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &prover_second_message.field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![second_commitments, prover_second_message].unwrap());
+        }
 
         let (verifier_second_msg, verifier_state) = AHPForR1CS::verifier_second_round(verifier_state, &mut fs_rng);
         // --------------------------------------------------------------------
@@ -320,15 +383,51 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         .map_err(MarlinError::from_pc_err)?;
         end_timer!(third_round_comm_time);
 
-        fs_rng.absorb(&to_bytes![third_commitments, prover_third_message].unwrap());
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&third_commitments);
+            match prover_third_message.field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &prover_third_message.field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![third_commitments, prover_third_message].unwrap());
+        }
 
         let verifier_state = AHPForR1CS::verifier_third_round(verifier_state, &mut fs_rng);
         // --------------------------------------------------------------------
+
+        let vanishing_polys = if for_recursion {
+            let domain_h = EvaluationDomain::new(circuit_proving_key.circuit.index_info.num_constraints)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+            let domain_k = EvaluationDomain::new(circuit_proving_key.circuit.index_info.num_non_zero)
+                .ok_or(SynthesisError::PolynomialDegreeTooLarge)?;
+
+            vec![
+                LabeledPolynomial::new(
+                    "vanishing_poly_h".to_string(),
+                    domain_h.vanishing_polynomial().into(),
+                    None,
+                    None,
+                ),
+                LabeledPolynomial::new(
+                    "vanishing_poly_k".to_string(),
+                    domain_k.vanishing_polynomial().into(),
+                    None,
+                    None,
+                ),
+            ]
+        } else {
+            vec![]
+        };
 
         // Gather prover polynomials in one vector.
         let polynomials: Vec<_> = circuit_proving_key
             .circuit
             .iter()
+            .chain(vanishing_polys.iter())
             .chain(prover_first_oracles.iter())
             .chain(prover_second_oracles.iter())
             .chain(prover_third_oracles.iter())
@@ -341,11 +440,18 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
             second_commitments.iter().map(|p| p.commitment()).cloned().collect(),
             third_commitments.iter().map(|p| p.commitment()).cloned().collect(),
         ];
+
+        let indexer_polynomials = if for_recursion {
+            AHPForR1CS::<F>::INDEXER_POLYNOMIALS_WITH_VANISHING.clone().to_vec()
+        } else {
+            AHPForR1CS::<F>::INDEXER_POLYNOMIALS.clone().to_vec()
+        };
+
         let labeled_commitments: Vec<_> = circuit_proving_key
             .circuit_verifying_key
             .iter()
             .cloned()
-            .zip(&AHPForR1CS::<F>::INDEXER_POLYNOMIALS)
+            .zip(indexer_polynomials)
             .map(|(c, l)| LabeledCommitment::new(l.to_string(), c, None))
             .chain(first_commitments.into_iter())
             .chain(second_commitments.into_iter())
@@ -363,11 +469,12 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
             .collect();
 
         // Compute the AHP verifier's query set.
-        let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng);
-        let lc_s = AHPForR1CS::construct_linear_combinations(&public_input, &polynomials, &verifier_state)?;
+        let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng, for_recursion);
+        let lc_s =
+            AHPForR1CS::construct_linear_combinations(&public_input, &polynomials, &verifier_state, for_recursion)?;
 
         let eval_time = start_timer!(|| "Evaluating linear combinations over query set");
-        let mut evaluations = Vec::new();
+        let mut evaluations_unsorted = Vec::<(String, F)>::new();
         for (label, point) in &query_set {
             let lc = lc_s
                 .iter()
@@ -375,25 +482,58 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
                 .ok_or_else(|| AHPError::MissingEval(label.to_string()))?;
             let evaluation = polynomials.get_lc_eval(&lc, *point)?;
             if !AHPForR1CS::<F>::LC_WITH_ZERO_EVAL.contains(&lc.label.as_ref()) {
-                evaluations.push(evaluation);
+                evaluations_unsorted.push((label.to_string(), evaluation));
             }
         }
+
+        evaluations_unsorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let evaluations = evaluations_unsorted.iter().map(|x| x.1).collect::<Vec<F>>();
         end_timer!(eval_time);
 
-        fs_rng.absorb(&evaluations);
+        if for_recursion {
+            fs_rng.absorb_nonnative_field_elements(&evaluations, OptimizationType::Constraints);
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![&evaluations].unwrap());
+        }
+
         let opening_challenge: F = u128::rand(&mut fs_rng).into();
 
-        let pc_proof = PC::open_combinations(
-            &circuit_proving_key.committer_key,
-            &lc_s,
-            polynomials,
-            &labeled_commitments,
-            &query_set,
-            opening_challenge,
-            &commitment_randomnesses,
-            Some(zk_rng),
-        )
-        .map_err(MarlinError::from_pc_err)?;
+        let pc_proof = if for_recursion {
+            let num_open_challenges: usize = 7;
+
+            let mut opening_challenges = Vec::<F>::new();
+            opening_challenges.append(&mut fs_rng.squeeze_128_bits_nonnative_field_elements(num_open_challenges));
+
+            // let _opening_challenges_f = |i| opening_challenges[i as usize];
+
+            // TODO (raychu86): Impl `check_combinations_individual_opening_challenges`.
+            // PC::open_combinations_individual_opening_challenges(
+            PC::open_combinations(
+                &circuit_proving_key.committer_key,
+                &lc_s,
+                polynomials,
+                &labeled_commitments,
+                &query_set,
+                fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0], // opening_challenges_f
+                &commitment_randomnesses,
+                Some(zk_rng),
+            )
+            .map_err(MarlinError::from_pc_err)?
+        } else {
+            let opening_challenge: F = fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0];
+
+            PC::open_combinations(
+                &circuit_proving_key.committer_key,
+                &lc_s,
+                polynomials,
+                &labeled_commitments,
+                &query_set,
+                opening_challenge,
+                &commitment_randomnesses,
+                Some(zk_rng),
+            )
+            .map_err(MarlinError::from_pc_err)?
+        };
 
         // Gather prover messages together.
         let prover_messages = vec![prover_first_message, prover_second_message, prover_third_message];
@@ -413,15 +553,44 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
     ) -> Result<bool, MarlinError<PC::Error>> {
         let verifier_time = start_timer!(|| "Marlin::Verify");
 
-        let mut fs_rng = FiatShamirRng::<D>::from_seed(
-            &to_bytes![&Self::PROTOCOL_NAME, &circuit_verifying_key, &public_input].unwrap(),
-        );
+        let public_input = {
+            let domain_x = EvaluationDomain::<F>::new(public_input.len() + 1).unwrap();
+
+            let mut unpadded_input = public_input.to_vec();
+            unpadded_input.resize(core::cmp::max(public_input.len(), domain_x.size() - 1), F::zero());
+
+            unpadded_input
+        };
+
+        let for_recursion = MC::FOR_RECURSION;
+
+        let mut fs_rng = FS::new();
+
+        if for_recursion {
+            fs_rng.absorb_bytes(&to_bytes![&Self::PROTOCOL_NAME].unwrap());
+            fs_rng.absorb_native_field_elements(&compute_vk_hash::<F, FSF, PC, FS>(&circuit_verifying_key));
+            fs_rng.absorb_nonnative_field_elements(&public_input, OptimizationType::Constraints);
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![&Self::PROTOCOL_NAME, &circuit_verifying_key, &public_input].unwrap());
+        }
 
         // --------------------------------------------------------------------
         // First round
 
         let first_commitments = &proof.commitments[0];
-        fs_rng.absorb(&to_bytes![first_commitments, proof.prover_messages[0]].unwrap());
+
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&first_commitments);
+            match proof.prover_messages[0].field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &proof.prover_messages[0].field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![first_commitments, proof.prover_messages[0]].unwrap());
+        }
 
         let (_, verifier_state) = AHPForR1CS::verifier_first_round(circuit_verifying_key.circuit_info, &mut fs_rng)?;
         // --------------------------------------------------------------------
@@ -429,7 +598,19 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         // --------------------------------------------------------------------
         // Second round
         let second_commitments = &proof.commitments[1];
-        fs_rng.absorb(&to_bytes![second_commitments, proof.prover_messages[1]].unwrap());
+
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&second_commitments);
+            match proof.prover_messages[1].field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &proof.prover_messages[1].field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![second_commitments, proof.prover_messages[1]].unwrap());
+        }
 
         let (_, verifier_state) = AHPForR1CS::verifier_second_round(verifier_state, &mut fs_rng);
         // --------------------------------------------------------------------
@@ -437,7 +618,19 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
         // --------------------------------------------------------------------
         // Third round
         let third_commitments = &proof.commitments[2];
-        fs_rng.absorb(&to_bytes![third_commitments, proof.prover_messages[2]].unwrap());
+
+        if for_recursion {
+            fs_rng.absorb_native_field_elements(&third_commitments);
+            match proof.prover_messages[2].field_elements.is_empty() {
+                true => (),
+                false => fs_rng.absorb_nonnative_field_elements(
+                    &proof.prover_messages[2].field_elements,
+                    OptimizationType::Constraints,
+                ),
+            };
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![third_commitments, proof.prover_messages[2]].unwrap());
+        }
 
         let verifier_state = AHPForR1CS::verifier_third_round(verifier_state, &mut fs_rng);
         // --------------------------------------------------------------------
@@ -452,6 +645,12 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
             .chain(AHPForR1CS::prover_second_round_degree_bounds(&index_info))
             .chain(AHPForR1CS::prover_third_round_degree_bounds(&index_info));
 
+        let polynomial_labels: Vec<String> = if for_recursion {
+            AHPForR1CS::<F>::polynomial_labels_with_vanishing().collect()
+        } else {
+            AHPForR1CS::<F>::polynomial_labels().collect()
+        };
+
         // Gather commitments in one vector.
         let commitments = circuit_verifying_key
             .iter()
@@ -459,38 +658,72 @@ impl<F: PrimeField, PC: PolynomialCommitment<F>, MC: MarlinConfig, D: Digest> Ma
             .chain(second_commitments)
             .chain(third_commitments)
             .cloned()
-            .zip(AHPForR1CS::<F>::polynomial_labels())
+            .zip(polynomial_labels)
             .zip(degree_bounds)
             .map(|((c, l), d)| LabeledCommitment::new(l, c, d));
 
-        let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng);
+        let (query_set, verifier_state) = AHPForR1CS::verifier_query_set(verifier_state, &mut fs_rng, for_recursion);
 
-        fs_rng.absorb(&proof.evaluations);
-        let opening_challenge: F = u128::rand(&mut fs_rng).into();
-
-        let mut evaluations = Evaluations::new();
-        let mut proof_evaluations = proof.evaluations.iter();
-        for q in query_set.iter().cloned() {
-            if AHPForR1CS::<F>::LC_WITH_ZERO_EVAL.contains(&q.0.as_ref()) {
-                evaluations.insert(q, F::zero());
-            } else {
-                evaluations.insert(q, *proof_evaluations.next().unwrap());
-            }
+        if for_recursion {
+            fs_rng.absorb_nonnative_field_elements(&proof.evaluations, OptimizationType::Constraints);
+        } else {
+            fs_rng.absorb_bytes(&to_bytes![&proof.evaluations].unwrap());
         }
 
-        let lc_s = AHPForR1CS::construct_linear_combinations(&public_input, &evaluations, &verifier_state)?;
+        let mut evaluations = Evaluations::new();
+        let mut evaluation_labels = Vec::<(String, F)>::new();
 
-        let evaluations_are_correct = PC::check_combinations(
-            &circuit_verifying_key.verifier_key,
-            &lc_s,
-            commitments,
-            &query_set,
-            &evaluations,
-            &proof.pc_proof,
-            opening_challenge,
-            &mut fs_rng,
-        )
-        .map_err(MarlinError::from_pc_err)?;
+        for q in query_set.iter().cloned() {
+            if AHPForR1CS::<F>::LC_WITH_ZERO_EVAL.contains(&q.0.as_ref()) {
+                evaluations.insert((q.0.clone(), q.1), F::zero());
+            } else {
+                evaluation_labels.push((q.0.clone(), q.1));
+            }
+        }
+        evaluation_labels.sort_by(|a, b| a.0.cmp(&b.0));
+        for (q, eval) in evaluation_labels.into_iter().zip(&proof.evaluations) {
+            evaluations.insert(q, *eval);
+        }
+
+        let lc_s =
+            AHPForR1CS::construct_linear_combinations(&public_input, &evaluations, &verifier_state, for_recursion)?;
+
+        let evaluations_are_correct = if for_recursion {
+            let num_open_challenges: usize = 7;
+
+            let mut opening_challenges = Vec::<F>::new();
+            opening_challenges.append(&mut fs_rng.squeeze_128_bits_nonnative_field_elements(num_open_challenges));
+
+            // let _opening_challenges_f = |i| opening_challenges[i as usize];
+
+            // TODO (raychu86): Impl `check_combinations_individual_opening_challenges`.
+            // PC::check_combinations_individual_opening_challenges(
+            PC::check_combinations(
+                &circuit_verifying_key.verifier_key,
+                &lc_s,
+                commitments,
+                &query_set,
+                &evaluations,
+                &proof.pc_proof,
+                fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0], // opening_challenges_f
+                &mut fs_rng,
+            )
+            .map_err(MarlinError::from_pc_err)?
+        } else {
+            let opening_challenge: F = fs_rng.squeeze_128_bits_nonnative_field_elements(1)[0];
+
+            PC::check_combinations(
+                &circuit_verifying_key.verifier_key,
+                &lc_s,
+                commitments,
+                &query_set,
+                &evaluations,
+                &proof.pc_proof,
+                opening_challenge,
+                &mut fs_rng,
+            )
+            .map_err(MarlinError::from_pc_err)?
+        };
 
         if !evaluations_are_correct {
             eprintln!("PC::Check failed");

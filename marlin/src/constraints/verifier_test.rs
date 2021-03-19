@@ -43,7 +43,7 @@ mod tests {
     type MultiPC = MarlinKZG10<Bls12_377>;
 
     type MarlinNativeInst = MarlinSNARK<Fr, Fq, MultiPC, FS, MarlinRecursiveConfig, Circuit<Fr>>;
-    type MarlinNativeInstCore = MarlinCore<Fr, MultiPC, MarlinRecursiveConfig, Blake2s>;
+    type MarlinNativeInstCore = MarlinCore<Fr, Fq, MultiPC, FS, MarlinRecursiveConfig, Blake2s>;
 
     type MultiPCVar = MarlinKZG10Gadget<Bls12_377, BW6_761, Bls12PairingGadget>;
 

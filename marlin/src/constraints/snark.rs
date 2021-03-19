@@ -100,7 +100,12 @@ where
     ) -> Result<(MarlinBound, UniversalSRS<TargetField, PC>), Box<MarlinConstraintsError>> {
         let MarlinBound { max_degree } = bound;
 
-        match MarlinCore::<TargetField, PC, MC, Blake2s>::universal_setup(1, 1, (max_degree + 5) / 3, rng) {
+        match MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::universal_setup(
+            1,
+            1,
+            (max_degree + 5) / 3,
+            rng,
+        ) {
             Ok(res) => Ok((bound.clone(), res)),
             Err(e) => Err(Box::new(MarlinConstraintsError::from(e))),
         }
@@ -114,7 +119,7 @@ where
         circuit: C,
         _rng: &mut R,
     ) -> Result<(<Self as SNARK>::ProvingKey, <Self as SNARK>::VerifyingKey), Box<MarlinConstraintsError>> {
-        let index_res = MarlinCore::<TargetField, PC, MC, Blake2s>::circuit_setup(&crs.1, &circuit);
+        let index_res = MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::circuit_setup(&crs.1, &circuit);
         match index_res {
             Ok(res) => Ok(res),
             Err(e) => Err(Box::new(MarlinError::from(e).into())),
@@ -128,7 +133,7 @@ where
         rng: &mut R,
     ) -> Result<(CircuitProvingKey<TargetField, PC>, CircuitVerifyingKey<TargetField, PC>), Box<MarlinConstraintsError>>
     {
-        Ok(MarlinCore::<TargetField, PC, MC, Blake2s>::circuit_specific_setup(&circuit, rng).unwrap())
+        Ok(MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::circuit_specific_setup(&circuit, rng).unwrap())
     }
 
     /// Prepare the verifying key.
@@ -144,7 +149,7 @@ where
         x: &[TargetField],
         proof: &Proof<TargetField, PC>,
     ) -> Result<bool, Box<MarlinConstraintsError>> {
-        match MarlinCore::<TargetField, PC, MC, Blake2s>::prepared_verify(pvk, x, proof) {
+        match MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::prepared_verify(pvk, x, proof) {
             Ok(res) => Ok(res),
             Err(e) => Err(Box::new(MarlinError::from(e).into())),
         }
@@ -182,7 +187,7 @@ where
         // Ok((parameters, verifying_key))
 
         let (circuit_proving_key, circuit_verifier_key) =
-            MarlinCore::<TargetField, PC, MC, Blake2s>::circuit_specific_setup(circuit, rng).unwrap();
+            MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::circuit_specific_setup(circuit, rng).unwrap();
 
         Ok((circuit_proving_key, circuit_verifier_key.into()))
     }
@@ -192,7 +197,7 @@ where
         circuit: &Self::AllocatedCircuit,
         rng: &mut R,
     ) -> Result<Self::Proof, SNARKError> {
-        match MarlinCore::<TargetField, PC, MC, Blake2s>::prove(&parameters, circuit, rng) {
+        match MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::prove(&parameters, circuit, rng) {
             Ok(res) => Ok(res),
             Err(e) => Err(SNARKError::from(e)),
         }
@@ -203,7 +208,7 @@ where
         input: &Self::VerifierInput,
         proof: &Self::Proof,
     ) -> Result<bool, SNARKError> {
-        match MarlinCore::<TargetField, PC, MC, Blake2s>::prepared_verify(verifying_key, input, proof) {
+        match MarlinCore::<TargetField, BaseField, PC, FS, MC, Blake2s>::prepared_verify(verifying_key, input, proof) {
             Ok(res) => Ok(res),
             Err(e) => Err(SNARKError::from(e)),
         }
