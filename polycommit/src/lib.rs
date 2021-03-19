@@ -53,6 +53,7 @@ extern crate alloc;
 use alloc::{
     borrow::{Cow, ToOwned},
     collections::{BTreeMap, BTreeSet},
+    iter::FromIterator,
     // marker::PhantomData,
     string::{String, ToString},
     sync::Arc,
@@ -64,6 +65,7 @@ use alloc::{
 use std::{
     borrow::{Cow, ToOwned},
     collections::{BTreeMap, BTreeSet},
+    iter::FromIterator,
     // marker::PhantomData,
     string::{String, ToString},
     sync::Arc,
@@ -461,6 +463,149 @@ pub trait PolynomialCommitment<F: Field>: Sized + Clone + Debug {
             &poly_evals,
             proof,
             opening_challenge,
+            rng,
+        )?;
+        if !pc_result {
+            eprintln!("Evaluation proofs failed to verify");
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// check but with individual challenges
+    fn check_individual_opening_challenges<'a>(
+        vk: &Self::VerifierKey,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        point: &'a F,
+        values: impl IntoIterator<Item = F>,
+        proof: &Self::Proof,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rng: Option<&mut dyn RngCore>,
+    ) -> Result<bool, Self::Error>
+    where
+        Self::Commitment: 'a;
+
+    /// batch_check but with individual challenges
+    fn batch_check_individual_opening_challenges<'a, R: RngCore>(
+        vk: &Self::VerifierKey,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        query_set: &QuerySet<F>,
+        evaluations: &Evaluations<F>,
+        proof: &Self::BatchProof,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rng: &mut R,
+    ) -> Result<bool, Self::Error>
+    where
+        Self::Commitment: 'a,
+    {
+        let commitments: BTreeMap<_, _> = commitments.into_iter().map(|c| (c.label(), c)).collect();
+
+        let mut query_to_labels_map = BTreeMap::new();
+        for (label, point) in query_set.iter() {
+            let labels = query_to_labels_map.entry(point).or_insert_with(BTreeSet::new);
+            labels.insert(label);
+        }
+
+        // Implicit assumption: proofs are order in same manner as queries in
+        // `query_to_labels_map`.
+        let proofs: Vec<_> = proof.clone().into();
+        assert_eq!(proofs.len(), query_to_labels_map.len());
+
+        let mut result = true;
+        for ((point, labels), proof) in query_to_labels_map.into_iter().zip(proofs) {
+            let mut comms: Vec<&'_ LabeledCommitment<_>> = Vec::new();
+            let mut values = Vec::new();
+            for label in labels {
+                let commitment = commitments.get(label).ok_or(Error::MissingPolynomial {
+                    label: label.to_string(),
+                })?;
+
+                let v_i = evaluations
+                    .get(&(label.clone(), point.clone()))
+                    .ok_or(Error::MissingEvaluation {
+                        label: label.to_string(),
+                    })?;
+
+                comms.push(commitment);
+                values.push(*v_i);
+            }
+
+            let proof_time = start_timer!(|| "Checking per-query proof");
+            result &= Self::check_individual_opening_challenges(
+                vk,
+                comms,
+                &point,
+                values,
+                &proof,
+                opening_challenges,
+                Some(rng),
+            )?;
+            end_timer!(proof_time);
+        }
+        Ok(result)
+    }
+
+    /// Check combinations with individual challenges.
+    fn check_combinations_individual_opening_challenges<'a, R: RngCore>(
+        vk: &Self::VerifierKey,
+        linear_combinations: impl IntoIterator<Item = &'a LinearCombination<F>>,
+        commitments: impl IntoIterator<Item = &'a LabeledCommitment<Self::Commitment>>,
+        eqn_query_set: &QuerySet<F>,
+        eqn_evaluations: &Evaluations<F>,
+        proof: &BatchLCProof<F, Self>,
+        opening_challenges: &dyn Fn(u64) -> F,
+        rng: &mut R,
+    ) -> Result<bool, Self::Error>
+    where
+        Self::Commitment: 'a,
+    {
+        let BatchLCProof { proof, evaluations } = proof;
+
+        let lc_s = BTreeMap::from_iter(linear_combinations.into_iter().map(|lc| (lc.label(), lc)));
+
+        let poly_query_set = lc_query_set_to_poly_query_set(lc_s.values().copied(), eqn_query_set);
+        let poly_evals: Evaluations<_> = poly_query_set
+            .iter()
+            .cloned()
+            .zip(evaluations.clone().unwrap())
+            .collect();
+
+        for &(ref lc_label, ref point) in eqn_query_set {
+            if let Some(lc) = lc_s.get(lc_label) {
+                let claimed_rhs =
+                    *eqn_evaluations
+                        .get(&(lc_label.clone(), point.clone()))
+                        .ok_or(Error::MissingEvaluation {
+                            label: lc_label.to_string(),
+                        })?;
+
+                let mut actual_rhs = F::zero();
+
+                for (coeff, label) in lc.iter() {
+                    let eval = match label {
+                        LCTerm::One => F::one(),
+                        LCTerm::PolyLabel(l) => *poly_evals
+                            .get(&(l.clone().into(), point.clone()))
+                            .ok_or(Error::MissingEvaluation { label: l.clone() })?,
+                    };
+
+                    actual_rhs += &(*coeff * &eval);
+                }
+                if claimed_rhs != actual_rhs {
+                    eprintln!("Claimed evaluation of {} is incorrect", lc.label());
+                    return Ok(false);
+                }
+            }
+        }
+
+        let pc_result = Self::batch_check_individual_opening_challenges(
+            vk,
+            commitments,
+            &poly_query_set,
+            &poly_evals,
+            proof,
+            opening_challenges,
             rng,
         )?;
         if !pc_result {
