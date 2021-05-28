@@ -17,7 +17,19 @@
 use crate::{
     ahp::{AHPError, AHPForR1CS, EvaluationsProvider},
     fiat_shamir::traits::FiatShamirRng,
-    marlin::{compute_vk_hash, CircuitProvingKey, CircuitVerifyingKey, MarlinError, MarlinMode, Proof, UniversalSRS},
+    marlin::{
+        compute_vk_hash,
+        CircuitProvingKey,
+        CircuitVerifyingKey,
+        MarlinError,
+        MarlinMode,
+        PreparedCircuitVerifyingKey,
+        Proof,
+        UniversalSRS,
+    },
+    PhantomData,
+    String,
+    Vec,
 };
 use snarkvm_algorithms::fft::EvaluationDomain;
 use snarkvm_fields::{PrimeField, ToConstraintField};
@@ -26,8 +38,6 @@ use snarkvm_polycommit::{Evaluations, LabeledCommitment, LabeledPolynomial, PCUn
 use snarkvm_r1cs::{ConstraintSynthesizer, SynthesisError};
 use snarkvm_utilities::{bytes::ToBytes, to_bytes};
 
-use crate::marlin::PreparedCircuitVerifyingKey;
-use core::marker::PhantomData;
 use rand_core::RngCore;
 
 /// The Marlin proof system.
