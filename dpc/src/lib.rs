@@ -72,6 +72,9 @@ pub use base_dpc::*;
 pub mod errors;
 pub use errors::*;
 
+pub mod marlin_dpc;
+pub use marlin_dpc::*;
+
 pub mod traits;
 pub use traits::*;
 
