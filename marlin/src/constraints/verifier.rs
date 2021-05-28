@@ -455,9 +455,5 @@ mod test {
             "Constraints not satisfied: {}",
             cs.which_is_unsatisfied().unwrap()
         );
-
-        println!("cs: size {}", cs.num_constraints());
-        println!("cs: size {}", cs.num_private_variables());
-        println!("cs: size {}", cs.num_public_variables());
     }
 }
