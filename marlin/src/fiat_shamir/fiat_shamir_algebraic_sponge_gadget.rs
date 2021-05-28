@@ -14,10 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::fiat_shamir::{
-    traits::{AlgebraicSpongeVar, FiatShamirRngVar},
-    AlgebraicSponge,
-    FiatShamirAlgebraicSpongeRng,
+use crate::{
+    fiat_shamir::{
+        traits::{AlgebraicSpongeVar, FiatShamirRngVar},
+        AlgebraicSponge,
+        FiatShamirAlgebraicSpongeRng,
+    },
+    PhantomData,
+    Vec,
 };
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{
@@ -32,8 +36,6 @@ use snarkvm_nonnative::{
     NonNativeFieldVar,
 };
 use snarkvm_r1cs::{ConstraintSystem, ConstraintVariable, LinearCombination, SynthesisError};
-
-use std::marker::PhantomData;
 
 /// Building the Fiat-Shamir sponge's gadget from any algebraic sponge's gadget.
 #[derive(Clone)]

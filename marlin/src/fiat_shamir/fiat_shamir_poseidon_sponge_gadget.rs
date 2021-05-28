@@ -21,9 +21,12 @@
 // ([COS20]: https://eprint.iacr.org/2019/1076) with small syntax changes.
 //
 
-use crate::fiat_shamir::{
-    fiat_shamir_poseidon_sponge::{PoseidonSponge, PoseidonSpongeState},
-    traits::AlgebraicSpongeVar,
+use crate::{
+    fiat_shamir::{
+        fiat_shamir_poseidon_sponge::{PoseidonSponge, PoseidonSpongeState},
+        traits::AlgebraicSpongeVar,
+    },
+    Vec,
 };
 use snarkvm_fields::PrimeField;
 use snarkvm_gadgets::{fields::FpGadget, traits::fields::FieldGadget, utilities::alloc::AllocGadget};
