@@ -43,10 +43,13 @@ extern crate alloc;
 #[cfg(not(feature = "std"))]
 use alloc::{
     collections::BTreeMap,
-    marker::PhantomData,
     string::{String, ToString},
     vec::Vec,
 };
+
+#[rustfmt::skip]
+#[cfg(not(feature = "std"))]
+use core::marker::PhantomData;
 
 #[rustfmt::skip]
 #[cfg(feature = "std")]

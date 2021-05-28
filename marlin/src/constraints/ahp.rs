@@ -26,6 +26,8 @@ use crate::{
     FiatShamirRngVar,
     PhantomData,
     PolynomialCommitment,
+    String,
+    Vec,
 };
 
 use snarkvm_algorithms::fft::EvaluationDomain;

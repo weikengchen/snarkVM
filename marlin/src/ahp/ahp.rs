@@ -16,6 +16,7 @@
 
 use crate::{
     ahp::{matrices, prover::ProverConstraintSystem, verifier, AHPError, CircuitInfo},
+    PhantomData,
     String,
     ToString,
     Vec,
@@ -26,7 +27,7 @@ use snarkvm_r1cs::errors::SynthesisError;
 
 use snarkvm_polycommit::{LCTerm, LabeledPolynomial, LinearCombination};
 
-use core::{borrow::Borrow, marker::PhantomData};
+use core::borrow::Borrow;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

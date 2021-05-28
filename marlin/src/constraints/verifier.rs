@@ -23,7 +23,9 @@ use crate::{
     marlin::MarlinError,
     FiatShamirRng,
     FiatShamirRngVar,
+    PhantomData,
     PolynomialCommitment,
+    Vec,
 };
 
 use snarkvm_fields::PrimeField;
@@ -34,8 +36,6 @@ use snarkvm_gadgets::{
 use snarkvm_nonnative::{params::OptimizationType, NonNativeFieldVar};
 use snarkvm_polycommit::{PCCheckRandomDataVar, PCCheckVar};
 use snarkvm_r1cs::ConstraintSystem;
-
-use core::marker::PhantomData;
 
 /// The Marlin verification gadget.
 pub struct MarlinVerificationGadget<
