@@ -33,6 +33,7 @@ use crate::{
         Proof,
     },
     FiatShamirRngVar,
+    PhantomData,
 };
 
 use snarkvm_algorithms::{SNARKError, SNARK};
@@ -46,10 +47,7 @@ use snarkvm_polycommit::{PCCheckVar, PolynomialCommitment};
 use snarkvm_r1cs::{ConstraintSynthesizer, ConstraintSystem, LinearCombination, SynthesisError, Variable};
 
 use rand::{CryptoRng, Rng, RngCore};
-use std::{
-    fmt::{Debug, Formatter},
-    marker::PhantomData,
-};
+use std::fmt::{Debug, Formatter};
 
 /// Marlin bound.
 #[derive(Clone, PartialEq, PartialOrd)]

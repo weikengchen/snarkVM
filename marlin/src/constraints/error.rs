@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with the snarkVM library. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::marlin::MarlinError;
+use crate::{marlin::MarlinError, String};
 
 use core::fmt::Display;
 use std::fmt::{Debug, Formatter};

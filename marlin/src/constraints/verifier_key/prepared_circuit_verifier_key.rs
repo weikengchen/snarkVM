@@ -19,7 +19,9 @@ use crate::{
     marlin::PreparedCircuitVerifyingKey,
     FiatShamirRng,
     FiatShamirRngVar,
+    PhantomData,
     PolynomialCommitment,
+    Vec,
 };
 
 use snarkvm_fields::{PrimeField, ToConstraintField};
@@ -33,7 +35,6 @@ use snarkvm_r1cs::{ConstraintSystem, SynthesisError};
 use snarkvm_utilities::{to_bytes, ToBytes};
 
 use core::borrow::Borrow;
-use std::marker::PhantomData;
 
 /// The prepared circuit verifying key gadget
 pub struct PreparedCircuitVerifyingKeyVar<

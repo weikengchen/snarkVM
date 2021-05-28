@@ -24,6 +24,7 @@ use crate::{
     AHPError,
     FiatShamirRng,
     FiatShamirRngVar,
+    PhantomData,
     PolynomialCommitment,
 };
 
@@ -52,7 +53,6 @@ use snarkvm_polycommit::{
 };
 use snarkvm_r1cs::ConstraintSystem;
 
-use core::marker::PhantomData;
 use hashbrown::{HashMap, HashSet};
 
 /// The Marlin verifier round state gadget used to output the state of each round.
